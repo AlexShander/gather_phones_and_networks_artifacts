@@ -1,0 +1,92 @@
+---
+
+- hosts: all
+  gather_facts: True
+
+  vars:
+    list_interfaces: []
+    list_ip_interfaces: []
+    list_ip_secondary: []
+    list_RAW_ip_secondary: []
+    ipv4_secondary_list_in: []
+
+  tasks:
+  - name: Get all network interfaces
+    set_fact:
+      list_interfaces: "{{ list_interfaces }} + [ 'ansible_' + '{{ item }}' ]"
+    with_items: "{{ ansible_interfaces | select('match', '^(eth|wlan|ens|eno|em|vlan|enp[0-9]s|enp[0-9]s0.)[0-9]+')| list }}"
+
+  - name: Debug interfaces
+    debug:
+      msg: "{{ hostvars[inventory_hostname]['ansible_%s' | format(item)] }}"
+    with_items: "{{ ansible_interfaces | regex_replace('-','_') }}"
+
+  - name: Get all IP addresses of interfaces
+    set_fact:
+      list_ip_interfaces: '{{ list_ip_interfaces }} + [ { "interface": "{{ vars[item].device }}",
+                                                    "address": "{{ vars[item].ipv4.address }}",
+                                                    "netmask": "{{ vars[item].ipv4.netmask }}" } ]'
+    when: 
+        - "'ipv4' in vars[item]"
+        - "'device' in vars[item]"
+    loop: "{{ list_interfaces }}"
+
+  - name: Get IP addresses from virtual interface
+    set_fact:
+      list_ip_interfaces: '{{ list_ip_interfaces }} + [ { "interface": "{{ interface_name }}",
+                                                    "address": "{{ address }}",
+                                                    "netmask": "{{ netmask }}" } ]'
+    vars:
+      interface_name: "{{ item | regex_replace('^ansible_(.*)$\', '\\1\') }}"
+      address: "{{ vars[item].ipv4.address }}"
+      netmask: "{{ vars[item].ipv4.netmask }}" 
+    when:
+      - "'ipv4' in vars[item]"
+      - "'device' not in vars[item]"
+    loop: "{{ list_interfaces }}"
+
+  - name: Set IP addresses 0.0.0.0 a down interfaces
+    set_fact:
+      list_ip_interfaces: '{{ list_ip_interfaces }} + [ { "interface": "{{ vars[item].device }}",
+                                                    "address": "0.0.0.0",
+                                                    "netmask": "0.0.0.0" } ]'
+    when:
+      - "'ipv4' not in vars[item]"
+      - "'device' in vars[item]"
+    loop: "{{ list_interfaces }}"
+
+#Так как дополнительных адресов на интерфейсе может быть больше чем два, то ansible отдаёт это массивом, с ключами.
+#Cделал разборку этого массива двумя тасками.
+# Сначала массив всех адресов по интерфейсам, двумя ключами, интерфейс и список к нему адресов
+  - name: Create secondary IP address RAW list
+    set_fact:
+      list_RAW_ip_secondary: '{{ list_RAW_ip_secondary }} + [ { "interface": "{{ vars[item].device }}",
+                                                            "iplist": "{{ vars[item].ipv4_secondaries | list }}"} ]'
+    vars:
+      interface_name: "{{ item | regex_replace('^ansible_(.*)$\', '\\1\') }}"
+    when:
+      - "'ipv4_secondaries' in vars[item]"
+    loop: "{{ list_interfaces }}"
+
+#Тут разбираю каждый интерфейс. Внутри вложенного скрипта прохожусьпо массиву адресов на интерфейсе
+  - name: Set list secondary IP addresses 
+    include_tasks: inc_readip.yml
+    loop: "{{ list_RAW_ip_secondary }}"
+    loop_control:
+      loop_var: outer_item # Это новое название item, во внутор цикла, что бы не было конфликта в наименованиях item во вложенном цикле
+
+
+
+  - name: Debug list_ip_secondary
+    debug:
+      msg: "{{ item  }}"
+    loop: "{{ list_ip_secondary }}"
+
+
+  - name: Get ip routes
+    shell: "/sbin/ip route show | /bin/grep via | /bin/sort | /bin/cut -d ' ' -f1,3,5"
+    register: get_ip_routes
+
+  - local_action: copy content={{ list_ip_interfaces }} dest={{ playbook_dir }}/../../outputinfo/ipaddresses/{{ ansible_date_time.date }}-{{ inventory_hostname }}.json
+
+  - local_action: copy content={{ get_ip_routes.stdout }} dest={{ playbook_dir }}/../../outputinfo/iproutes/{{ ansible_date_time.date }}-{{ inventory_hostname }}.txt

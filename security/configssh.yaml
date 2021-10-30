@@ -1,0 +1,117 @@
+---
+- hosts: ssh22.pavlodar.npp.aster.kz
+  tasks:
+  - name: Yum install libselinux-python, policycoreutils-python for manage SELinux
+    yum:
+      name:
+        - libselinux-python
+        - policycoreutils-python
+      state: latest
+    become: yes
+    when:
+      - ansible_facts['distribution'] == "CentOS"
+      - ansible_facts['distribution_major_version'] == "7"
+
+  - name: Add new ssh port 6123 in SElinux
+    seport:
+      ports: 22,6123
+      proto: tcp
+      reload: yes
+      setype: ssh_port_t
+      state: present
+    ignore_errors: True
+    become: yes
+
+  - name: Firewalld added port 6123 TCP
+    firewalld:
+      zone: public
+      port: 6123/tcp
+      state: enabled
+      permanent: yes
+      immediate: yes
+    become: yes
+
+  - name: Add user ansiblekorkem
+    user:
+      name: ansiblekorkem
+      append: no
+      create_home: yes
+      password: '!'
+      state: present
+    become: yes
+
+  - name: Add identify key to authorized keys on host
+    authorized_key:
+      user: ansiblekorkem
+      state: present
+      key: "{{ lookup('file','{{ playbook_dir }}/files/keys/id_rsa.pub') }}"
+    register: add_identity_key
+    become: yes
+    
+  - name: Disable empty password login
+    lineinfile:
+      path: /etc/ssh/sshd_config
+      regex: '^#?PermitEmptyPasswords'
+      line: 'PermitEmptyPasswords no'
+    notify: restart sshd
+    become: yes
+    
+  - name: Disable remote root login
+    lineinfile:
+      path: /etc/ssh/sshd_config
+      regex: '^#?PermitRootLogin'
+      line: 'PermitRootLogin no'
+    notify: restart sshd
+    become: yes
+      
+  - name:
+    lineinfile:
+      path: /etc/ssh/sshd_config
+      regex: '^(#\s*)?PasswordAuthentication '
+      line: 'PasswordAuthentication no'
+    when: add_identity_key is succeeded and not add_identity_key is skipped
+    notify: restart sshd
+    become: yes
+    
+  - name: Enbale PAM READ https://linux.die.net/man/5/sshd_config
+    lineinfile:
+      path: /etc/ssh/sshd_config
+      regex: '^#?UsePAM'
+      line: 'UsePAM yes'
+    notify: restart sshd
+    become: yes
+    
+  - name: Change SSH default port 22 to 6123 port
+    lineinfile:
+      path: /etc/ssh/sshd_config
+      regex: '^#?Port 22'
+      line: 'Port 6123'
+    notify: restart sshd
+    become: yes
+
+  - name: "Check '/etc/sudoers' contains ansiblekorkem 'ALL=(ALL) NOPASSWD: ALL'"
+    lineinfile:
+      path: /etc/sudoers
+      line: 'ansiblekorkem ALL=(ALL) NOPASSWD:ALL'
+      state: present
+    check_mode: yes
+    ignore_errors: True
+    register: sudoers
+    failed_when: (sudoers is changed) or (sudoers is failed)
+    become: yes
+  
+  - name: No password to sudo for ansiblekorkem
+    lineinfile:
+      path: /etc/sudoers
+      insertbefore: EOF
+      line: 'ansiblekorkem ALL=(ALL) NOPASSWD:ALL'
+    when: not sudoers is succeeded 
+    become: yes
+
+  handlers:
+  - name: restart sshd
+    systemd:
+      name: sshd
+      state: restarted
+    become: yes
+   

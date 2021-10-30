@@ -1,0 +1,40 @@
+---
+- hosts: kazpost, centos7, npp-servers
+  gather_facts: true
+  tasks:
+    - name: Copy python-ami files
+      copy:
+        src: /home/ansiblekorkem/ansible_stat/asterisk-automation/getphones/python/
+        dest: /home/ansiblekorkem/aster-ami-phones
+        owner: root
+        group: root
+        mode: '0744'
+        directory_mode: yes
+      become: yes
+  
+    - name: Get admin's password AMI
+      shell: grep '^\[admin\]' /etc/asterisk/manage*.conf -A 3 | grep secret | cut -d'=' -f2 |  tr -d '[:space:]'
+      become: yes
+      register: amipassword
+
+    - name: Change default password in the file settings.py
+      replace:
+        dest: /home/ansiblekorkem/aster-ami-phones/settings.py
+        regexp: '^(.+)(password)(.+)'
+        replace: '\g<1>{{ amipassword.stdout }}\g<3>'
+      become: yes
+
+    - name: Get Status Phones
+      command: python2 /home/ansiblekorkem/aster-ami-phones/pjsipuseragent.py
+      become: yes
+      register: getphones
+
+    - name: Saved information about phones
+      local_action:
+        module: copy
+        content: "{{ getphones.stdout_lines|default([]) | join('\n') }}"
+        dest: "{{ playbook_dir }}/../../outputinfo/infophones/{{ ansible_date_time.date }}-{{ inventory_hostname }}.csv"
+
+#    - name: Debug get status phones
+#      debug:
+#        msg: "{{ getphones.stdout_lines | join('.') }}"

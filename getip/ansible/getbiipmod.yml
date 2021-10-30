@@ -1,0 +1,59 @@
+---
+
+- hosts: all
+  gather_facts: True
+
+  vars:
+    list_interfaces: []
+    list_ip_interfaces: []
+
+  tasks:
+  - name: Get all network interfaces
+    set_fact:
+      list_interfaces: "{{ list_interfaces }} + [ 'ansible_' + '{{ item }}' ]"
+    with_items: "{{ ansible_interfaces | select('match', '^(eth|wlan|ens|eno|em|vlan|enp[0-9]s|enp[0-9]s0.)[0-9]+') | list }}"
+
+  - name: Get all IP addresses of interfaces
+    set_fact:
+      list_ip_interfaces: '{{ list_ip_interfaces }} + [ { "interface": "{{ vars[item].device }}",
+                                                    "address": "{{ vars[item].ipv4.address }}",
+                                                    "netmask": "{{ vars[item].ipv4.netmask }}" } ]'
+    when: 
+        - "'ipv4' in vars[item]"
+        - "'device' in vars[item]"
+    loop: "{{ list_interfaces }}"
+
+
+  - name: Get IP addresses from virtual interface
+    set_fact:
+      list_ip_interfaces: '{{ list_ip_interfaces }} + [ { "interface": "{{ vars[item] }}",
+                                                    "address": "{{ vars[item].ipv4.address }}",
+                                                    "netmask": "{{ vars[item].ipv4.netmask }}" } ]'
+    when:
+      - "'ipv4' in vars[item]"
+      - "'device' not in vars[item]"
+    loop: "{{ list_interfaces }}"
+
+
+  - name: Set IP addresses 0.0.0.0 a down interfaces
+    set_fact:
+      list_ip_interfaces: '{{ list_ip_interfaces }} + [ { "interface": "{{ vars[item].device }}",
+                                                    "address": "0.0.0.0",
+                                                    "netmask": "0.0.0.0" } ]'
+    when:
+      - "'ipv4' not in vars[item]"
+      - "'device' in vars[item]"
+    loop: "{{ list_interfaces }}"
+
+
+  - name: Set IP addresses 0.0.0.0 a down interfaces
+    set_fact:
+      list_ip_interfaces: '{{ list_ip_interfaces }} + [ { "interface": "{{ vars[item].device }}",
+                                                    "address": "{{ vars[item].ipv4_secondaries.address }}",
+                                                    "netmask": "{{ vars[item].ipv4_secondaries.netmask }}" } ]'
+    when:
+      - "'ipv4_secondaries' in vars[item]"
+    loop: "{{ list_interfaces }}"
+
+
+  - local_action: copy content={{ list_ip_interfaces }} dest={{ outputdir }}/{{ inventory_hostname }}

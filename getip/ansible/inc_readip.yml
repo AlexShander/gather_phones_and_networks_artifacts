@@ -1,0 +1,4 @@
+- name: In LOOP
+  set_fact:
+    list_ip_interfaces: '{{ list_ip_interfaces }} + [ { "interface": "{{ outer_item.interface }}", "address": "{{ item.address }}", "netmask": "{{ item.netmask }}" } ] '
+  with_items: "{{ outer_item.iplist }}"
